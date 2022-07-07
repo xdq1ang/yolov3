@@ -16,6 +16,7 @@ from threading import Thread
 import numpy as np
 import torch
 from tqdm import tqdm
+from torch import nn
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # root directory
@@ -32,6 +33,7 @@ from utils.general import (LOGGER, NCOLS, box_iou, check_dataset, check_img_size
 from utils.metrics import ConfusionMatrix, ap_per_class
 from utils.plots import output_to_target, plot_images, plot_val_study
 from utils.torch_utils import select_device, time_sync
+from utils.metrics import metric
 
 
 def save_one_txt(predn, save_conf, shape, file):
@@ -161,8 +163,10 @@ def run(data,
     s = ('%20s' + '%11s' * 6) % ('Class', 'Images', 'Labels', 'P', 'R', 'mAP@.5', 'mAP@.5:.95')
     dt, p, r, f1, mp, mr, map50, map = [0.0, 0.0, 0.0], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
     loss = torch.zeros(3, device=device)
+    segloss = torch.zeros(1, device=device)
     jdict, stats, ap, ap_class = [], [], [], []
     pbar = tqdm(dataloader, desc=s, ncols=NCOLS, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
+    val_iou = []
     for batch_i, (im, msk, targets, paths, shapes) in enumerate(pbar):
         t1 = time_sync()
         if pt:
@@ -171,17 +175,19 @@ def run(data,
             targets = targets.to(device)
         im = im.half() if half else im.float()  # uint8 to fp16/32
         im /= 255  # 0 - 255 to 0.0 - 1.0
+        msk = msk.long()
         nb, _, height, width = im.shape  # batch size, channels, height, width
         t2 = time_sync()
         dt[0] += t2 - t1
 
         # Inference
-        out, train_out = model(im) if training else model(im, augment=augment, val=True)  # inference, loss outputs
+        (out, train_out), seg_out= model(im) if training else model(im, augment=augment, val=True)  # inference, loss outputs
         dt[1] += time_sync() - t2
 
         # Loss
         if compute_loss:
             loss += compute_loss([x.float() for x in train_out], targets)[1]  # box, obj, cls
+            segloss += nn.CrossEntropyLoss(ignore_index = 255)(seg_out, msk)
 
         # NMS
         targets[:, 2:] *= torch.Tensor([width, height, width, height]).to(device)  # to pixels
@@ -227,6 +233,12 @@ def run(data,
             if save_json:
                 save_one_json(predn, jdict, path, class_map)  # append to COCO-JSON dictionary
             callbacks.run('on_val_image_end', pred, predn, path, names, im[si])
+        
+        # 计算分割的iou
+        seg_out = torch.argmax(nn.Softmax(dim=X)(seg_out), dim = 1)
+        me = metric(seg_out, msk, [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20])
+        miou = me.miou()
+        val_iou.append(miou)
 
         # Plot images
         if plots and batch_i < 3:
@@ -299,7 +311,8 @@ def run(data,
     maps = np.zeros(nc) + map
     for i, c in enumerate(ap_class):
         maps[c] = ap[i]
-    return (mp, mr, map50, map, *(loss.cpu() / len(dataloader)).tolist()), maps, t
+    val_iou = np.nanmean(np.array(val_iou))
+    return (mp, mr, map50, map, *(loss.cpu() / len(dataloader)).tolist(), *(segloss.cpu() / len(dataloader)).tolist()), val_iou, maps, t
 
 
 def parse_opt():
