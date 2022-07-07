@@ -372,6 +372,10 @@ def img2label_paths(img_paths):
     # Define label paths as a function of image paths
     sa, sb = os.sep + 'images' + os.sep, os.sep + 'labels' + os.sep  # /images/, /labels/ substrings
     return [sb.join(x.rsplit(sa, 1)).rsplit('.', 1)[0] + '.txt' for x in img_paths]
+def img2mask_paths(img_paths):
+    # Define mask paths as a function of image paths
+    sa, sb = os.sep + 'images' + os.sep, os.sep + 'masks' + os.sep  # /images/, /labels/ substrings
+    return [sb.join(x.rsplit(sa, 1)).rsplit('.', 1)[0] + '.png' for x in img_paths]
 
 
 class LoadImagesAndLabels(Dataset):
@@ -414,6 +418,7 @@ class LoadImagesAndLabels(Dataset):
 
         # Check cache
         self.label_files = img2label_paths(self.img_files)  # labels
+        self.mask_files = img2mask_paths(self.img_files)    # masks
         cache_path = (p if p.is_file() else Path(self.label_files[0]).parent).with_suffix('.cache')
         try:
             cache, exists = np.load(cache_path, allow_pickle=True).item(), True  # load dict
@@ -438,6 +443,7 @@ class LoadImagesAndLabels(Dataset):
         self.shapes = np.array(shapes, dtype=np.float64)
         self.img_files = list(cache.keys())  # update
         self.label_files = img2label_paths(cache.keys())  # update
+        self.mask_files = img2mask_paths(cache.keys())
         n = len(shapes)  # number of images
         bi = np.floor(np.arange(n) / batch_size).astype(np.int)  # batch index
         nb = bi[-1] + 1  # number of batches
@@ -467,6 +473,7 @@ class LoadImagesAndLabels(Dataset):
             irect = ar.argsort()
             self.img_files = [self.img_files[i] for i in irect]
             self.label_files = [self.label_files[i] for i in irect]
+            self.mask_files = [self.mask_files[i] for i in irect]
             self.labels = [self.labels[i] for i in irect]
             self.shapes = s[irect]  # wh
             ar = ar[irect]
@@ -485,6 +492,7 @@ class LoadImagesAndLabels(Dataset):
 
         # Cache images into memory for faster training (WARNING: large datasets may exceed system RAM)
         self.imgs, self.img_npy = [None] * n, [None] * n
+        self.msks, self.msk_npy = [None] * n, [None] * n
         if cache_images:
             if cache_images == 'disk':
                 self.im_cache_dir = Path(Path(self.img_files[0]).parent.as_posix() + '_npy')
@@ -557,20 +565,21 @@ class LoadImagesAndLabels(Dataset):
         mosaic = self.mosaic and random.random() < hyp['mosaic']
         if mosaic:
             # Load mosaic
-            img, labels = load_mosaic(self, index)
+            img, msk, labels = load_mosaic(self, index)
             shapes = None
 
             # MixUp augmentation
             if random.random() < hyp['mixup']:
-                img, labels = mixup(img, labels, *load_mosaic(self, random.randint(0, self.n - 1)))
+                img, msk, labels = mixup(img, msk, labels, *load_mosaic(self, random.randint(0, self.n - 1)))
 
         else:
             # Load image
             img, (h0, w0), (h, w) = load_image(self, index)
+            msk,(_, _), (_, _) = load_masks(self, index)
 
             # Letterbox
             shape = self.batch_shapes[self.batch[index]] if self.rect else self.img_size  # final letterboxed shape
-            img, ratio, pad = letterbox(img, shape, auto=False, scaleup=self.augment)
+            img, msk, ratio, pad = letterbox(img, msk, shape, auto=False, scaleup=self.augment)
             shapes = (h0, w0), ((h / h0, w / w0), pad)  # for COCO mAP rescaling
 
             labels = self.labels[index].copy()
@@ -578,7 +587,7 @@ class LoadImagesAndLabels(Dataset):
                 labels[:, 1:] = xywhn2xyxy(labels[:, 1:], ratio[0] * w, ratio[1] * h, padw=pad[0], padh=pad[1])
 
             if self.augment:
-                img, labels = random_perspective(img, labels,
+                img, msk, labels = random_perspective(img, msk, labels,
                                                  degrees=hyp['degrees'],
                                                  translate=hyp['translate'],
                                                  scale=hyp['scale'],
@@ -600,12 +609,14 @@ class LoadImagesAndLabels(Dataset):
             # Flip up-down
             if random.random() < hyp['flipud']:
                 img = np.flipud(img)
+                msk = np.flipud(msk)
                 if nl:
                     labels[:, 2] = 1 - labels[:, 2]
 
             # Flip left-right
             if random.random() < hyp['fliplr']:
                 img = np.fliplr(img)
+                msk = np.fliplr(msk)
                 if nl:
                     labels[:, 1] = 1 - labels[:, 1]
 
@@ -619,15 +630,16 @@ class LoadImagesAndLabels(Dataset):
         # Convert
         img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
         img = np.ascontiguousarray(img)
+        msk = np.ascontiguousarray(msk)
 
-        return torch.from_numpy(img), labels_out, self.img_files[index], shapes
+        return torch.from_numpy(img), torch.from_numpy(msk), labels_out, self.img_files[index], shapes
 
     @staticmethod
     def collate_fn(batch):
-        img, label, path, shapes = zip(*batch)  # transposed
+        img, msk, label, path, shapes = zip(*batch)  # transposed
         for i, l in enumerate(label):
             l[:, 0] = i  # add target image index for build_targets()
-        return torch.stack(img, 0), torch.cat(label, 0), path, shapes
+        return torch.stack(img, 0), torch.stack(msk, 0), torch.cat(label, 0), path, shapes
 
     @staticmethod
     def collate_fn4(batch):
@@ -676,7 +688,25 @@ def load_image(self, i):
         return im, (h0, w0), im.shape[:2]  # im, hw_original, hw_resized
     else:
         return self.imgs[i], self.img_hw0[i], self.img_hw[i]  # im, hw_original, hw_resized
-
+def load_masks(self, i):
+    # loads 1 image from dataset index 'i', returns im, original hw, resized hw
+    msk = self.msks[i]
+    if msk is None:  # not cached in ram
+        npy = self.msk_npy[i]
+        if npy and npy.exists():  # load npy
+            im = np.load(npy)
+        else:  # read image
+            path = self.mask_files[i]
+            im = np.array(Image.open(path))
+            assert im is not None, f'Mask Not Found {path}'
+        h0, w0 = im.shape  # orig hw
+        r = self.img_size / max(h0, w0)  # ratio
+        if r != 1:  # if sizes are not equal
+            im = cv2.resize(im, (int(w0 * r), int(h0 * r)),
+                            interpolation= Image.NEAREST)
+        return im, (h0, w0), im.shape[:2]  # im, hw_original, hw_resized
+    else:
+        return self.msks[i], self.img_hw0[i], self.img_hw[i]  # im, hw_original, hw_resized
 
 def load_mosaic(self, index):
     #  4-mosaic loader. Loads 1 image + 3 random images into a 4-image mosaic
@@ -688,10 +718,12 @@ def load_mosaic(self, index):
     for i, index in enumerate(indices):
         # Load image
         img, _, (h, w) = load_image(self, index)
+        msk, (_, _), (_, _) = load_masks(self, index)
 
         # place img in img4
         if i == 0:  # top left
             img4 = np.full((s * 2, s * 2, img.shape[2]), 114, dtype=np.uint8)  # base image with 4 tiles
+            msk4 = np.full((s * 2, s * 2), 0, dtype=np.uint8)  # base image with 4 tiles
             x1a, y1a, x2a, y2a = max(xc - w, 0), max(yc - h, 0), xc, yc  # xmin, ymin, xmax, ymax (large image)
             x1b, y1b, x2b, y2b = w - (x2a - x1a), h - (y2a - y1a), w, h  # xmin, ymin, xmax, ymax (small image)
         elif i == 1:  # top right
@@ -705,6 +737,7 @@ def load_mosaic(self, index):
             x1b, y1b, x2b, y2b = 0, 0, min(w, x2a - x1a), min(y2a - y1a, h)
 
         img4[y1a:y2a, x1a:x2a] = img[y1b:y2b, x1b:x2b]  # img4[ymin:ymax, xmin:xmax]
+        msk4[y1a:y2a, x1a:x2a] = msk[y1b:y2b, x1b:x2b]  # msk4[ymin:ymax, xmin:xmax]
         padw = x1a - x1b
         padh = y1a - y1b
 
@@ -723,8 +756,8 @@ def load_mosaic(self, index):
     # img4, labels4 = replicate(img4, labels4)  # replicate
 
     # Augment
-    img4, labels4, segments4 = copy_paste(img4, labels4, segments4, p=self.hyp['copy_paste'])
-    img4, labels4 = random_perspective(img4, labels4, segments4,
+    img4, msk4, labels4, segments4 = copy_paste(img4, msk4, labels4, segments4, p=self.hyp['copy_paste'])
+    img4, msk4, labels4 = random_perspective(img4, msk4, labels4, segments4,
                                        degrees=self.hyp['degrees'],
                                        translate=self.hyp['translate'],
                                        scale=self.hyp['scale'],
@@ -732,7 +765,7 @@ def load_mosaic(self, index):
                                        perspective=self.hyp['perspective'],
                                        border=self.mosaic_border)  # border to remove
 
-    return img4, labels4
+    return img4, msk4, labels4
 
 
 def load_mosaic9(self, index):
