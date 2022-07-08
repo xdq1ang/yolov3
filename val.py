@@ -16,6 +16,7 @@ from threading import Thread
 import numpy as np
 import torch
 from tqdm import tqdm
+from data.voc_color import voc_colormap
 from torch import nn
 
 FILE = Path(__file__).resolve()
@@ -31,7 +32,7 @@ from utils.general import (LOGGER, NCOLS, box_iou, check_dataset, check_img_size
                            coco80_to_coco91_class, colorstr, increment_path, non_max_suppression, print_args,
                            scale_coords, xywh2xyxy, xyxy2xywh)
 from utils.metrics import ConfusionMatrix, ap_per_class
-from utils.plots import output_to_target, plot_images, plot_val_study
+from utils.plots import output_to_target, plot_images, plot_val_study, plot_masks
 from utils.torch_utils import select_device, time_sync
 from utils.metrics import metric
 
@@ -235,7 +236,7 @@ def run(data,
             callbacks.run('on_val_image_end', pred, predn, path, names, im[si])
         
         # 计算分割的iou
-        seg_out = torch.argmax(nn.Softmax(dim=X)(seg_out), dim = 1)
+        seg_out = torch.argmax(nn.Softmax(dim=1)(seg_out), dim = 1)
         me = metric(seg_out, msk, [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20])
         miou = me.miou()
         val_iou.append(miou)
@@ -246,6 +247,10 @@ def run(data,
             Thread(target=plot_images, args=(im, targets, paths, f, names), daemon=True).start()
             f = save_dir / f'val_batch{batch_i}_pred.jpg'  # predictions
             Thread(target=plot_images, args=(im, output_to_target(out), paths, f, names), daemon=True).start()
+            f = save_dir / f'val_batch{batch_i}_mask.png'  # mask
+            Thread(target=plot_masks, args=(msk, f, voc_colormap()), daemon=True).start()
+            f = save_dir / f'val_batch{batch_i}_mask_pred.png'  # predictions
+            Thread(target=plot_masks, args=(seg_out, f, voc_colormap()), daemon=True).start()
 
     # Compute metrics
     stats = [np.concatenate(x, 0) for x in zip(*stats)]  # to numpy
@@ -317,8 +322,8 @@ def run(data,
 
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data', type=str, default=ROOT / 'data/coco128.yaml', help='dataset.yaml path')
-    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'yolov3.pt', help='model.pt path(s)')
+    parser.add_argument('--data', type=str, default=ROOT / 'data/voc.yaml', help='dataset.yaml path')
+    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / r'runs\train\exp\weights\best.pt', help='model.pt path(s)')
     parser.add_argument('--batch-size', type=int, default=32, help='batch size')
     parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='inference size (pixels)')
     parser.add_argument('--conf-thres', type=float, default=0.001, help='confidence threshold')

@@ -7,7 +7,7 @@ import math
 import os
 from copy import copy
 from pathlib import Path
-
+import PIL
 import cv2
 import matplotlib
 import matplotlib.pyplot as plt
@@ -238,6 +238,36 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None, max
                     label = f'{cls}' if labels else f'{cls} {conf[j]:.1f}'
                     annotator.box_label(box, label, color=color)
     annotator.im.save(fname)  # save
+
+def plot_masks(images, fname='images.jpg', color = None, max_size=1920, max_subplots=16):
+    # Plot image grid with labels
+    if isinstance(images, torch.Tensor):
+        images = images.cpu().float().numpy()
+
+    bs, h, w = images.shape  # batch size, _, height, width
+    bs = min(bs, max_subplots)  # limit plot images
+    ns = np.ceil(bs ** 0.5)  # number of subplots (square)
+
+    # Build Image
+    mosaic = np.full((int(ns * h), int(ns * w)), 255, dtype=np.uint8)  # init
+    for i, im in enumerate(images):
+        if i == max_subplots:  # if last batch has fewer images than we expect
+            break
+        x, y = int(w * (i // ns)), int(h * (i % ns))  # block origin
+        mosaic[y:y + h, x:x + w] = im
+
+    # Resize (optional)
+    scale = max_size / ns / max(h, w)
+    if scale < 1:
+        h = math.ceil(scale * h)
+        w = math.ceil(scale * w)
+        mosaic = cv2.resize(mosaic, tuple(int(x * ns) for x in (w, h)), interpolation= PIL.Image.NEAREST)
+    mosaic = PIL.Image.fromarray(mosaic, mode='P')
+    mosaic.putpalette(color)
+    mosaic.save(fname)
+
+    
+
 
 
 def plot_lr_scheduler(optimizer, scheduler, epochs=300, save_dir=''):
