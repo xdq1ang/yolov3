@@ -121,7 +121,7 @@ class Annotator:
         return np.asarray(self.im)
 
 
-def feature_visualization(x, module_type, stage, n=32, save_dir=Path('runs/detect/exp')):
+def feature_visualization(x, module_type, stage, n=32, save_dir=Path('runs/train')):
     """
     x:              Features to be visualized
     module_type:    Module type
@@ -140,7 +140,7 @@ def feature_visualization(x, module_type, stage, n=32, save_dir=Path('runs/detec
             ax = ax.ravel()
             plt.subplots_adjust(wspace=0.05, hspace=0.05)
             for i in range(n):
-                ax[i].imshow(blocks[i].squeeze())  # cmap='gray'
+                ax[i].imshow(blocks[i].squeeze().detach().numpy())  # cmap='gray'
                 ax[i].axis('off')
 
             print(f'Saving {save_dir / f}... ({n}/{channels})')
