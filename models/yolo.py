@@ -150,6 +150,7 @@ class Model(nn.Module):
                 self._profile_one_layer(m, x, dt)
             if isinstance(m, Seg_Predictor):
                 seg_out = m(x)
+                x = x[0]
             else:
                 x = m(x)  # run
             y.append(x if m.i in self.save else None)  # save output

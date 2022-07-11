@@ -172,7 +172,7 @@ def run(data,
         t1 = time_sync()
         if pt:
             im = im.to(device, non_blocking=True)
-            msk = msk.to(device, non_blocking=True)
+            msk = msk.to(device)
             targets = targets.to(device)
         im = im.half() if half else im.float()  # uint8 to fp16/32
         im /= 255  # 0 - 255 to 0.0 - 1.0
@@ -188,7 +188,8 @@ def run(data,
         # Loss
         if compute_loss:
             loss += compute_loss([x.float() for x in train_out], targets)[1]  # box, obj, cls
-            segloss += nn.CrossEntropyLoss(ignore_index = 255)(seg_out, msk)
+            print(np.unique(msk.cpu().detach().numpy()))
+            segloss += nn.CrossEntropyLoss(ignore_index = 255)(seg_out.float(), msk)
 
         # NMS
         targets[:, 2:] *= torch.Tensor([width, height, width, height]).to(device)  # to pixels
