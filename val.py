@@ -188,7 +188,6 @@ def run(data,
         # Loss
         if compute_loss:
             loss += compute_loss([x.float() for x in train_out], targets)[1]  # box, obj, cls
-            print(np.unique(msk.cpu().detach().numpy()))
             segloss += nn.CrossEntropyLoss(ignore_index = 255)(seg_out.float(), msk)
 
         # NMS
