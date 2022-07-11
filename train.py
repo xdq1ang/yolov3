@@ -298,8 +298,6 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
             ni = i + nb * epoch  # number integrated batches (since train start)
             imgs = imgs.to(device, non_blocking=True).float() / 255  # uint8 to float32, 0-255 to 0.0-1.0
             msks = msks.to(device, non_blocking=True).long()
-            if i>10:
-                break
             # Warmup
             if ni <= nw:
                 xi = [0, nw]  # x interp
