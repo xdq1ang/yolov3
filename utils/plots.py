@@ -240,6 +240,12 @@ def plot_images(images, targets, paths=None, fname='images.jpg', names=None, max
     annotator.im.save(fname)  # save
 
 def plot_masks(images, fname='images.jpg', color = None, max_size=1920, max_subplots=16):
+    # 生成调色板
+    keys=color.keys()
+    palette=[[n,n,n] for n in range(max(keys)+1)]
+    for kk,vv in color.items():
+        palette[kk]=vv
+    palette=np.array(palette, dtype='uint8').flatten()
     # Plot image grid with labels
     if isinstance(images, torch.Tensor):
         images = images.cpu().float().numpy()
@@ -263,7 +269,7 @@ def plot_masks(images, fname='images.jpg', color = None, max_size=1920, max_subp
         w = math.ceil(scale * w)
         mosaic = cv2.resize(mosaic, tuple(int(x * ns) for x in (w, h)), interpolation= PIL.Image.NEAREST)
     mosaic = PIL.Image.fromarray(mosaic, mode='P')
-    mosaic.putpalette(color)
+    mosaic.putpalette(palette)
     mosaic.save(fname)
 
     

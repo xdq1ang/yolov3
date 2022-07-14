@@ -16,7 +16,6 @@ from threading import Thread
 import numpy as np
 import torch
 from tqdm import tqdm
-from data.voc_color import voc_colormap
 from torch import nn
 
 FILE = Path(__file__).resolve()
@@ -237,20 +236,21 @@ def run(data,
         
         # 计算分割的iou
         seg_out = torch.argmax(nn.Softmax(dim=1)(seg_out), dim = 1)
-        me = metric(seg_out, msk, [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20])
+        trainClasses = list(range(data['nc']))
+        me = metric(seg_out, msk, trainClasses)
         miou = me.miou()
         val_iou.append(miou)
 
         # Plot images
-        if plots and batch_i < 3:
+        if plots and batch_i < 10:
             f = save_dir / f'val_batch{batch_i}_labels.jpg'  # labels
             Thread(target=plot_images, args=(im, targets, paths, f, names), daemon=True).start()
             f = save_dir / f'val_batch{batch_i}_pred.jpg'  # predictions
             Thread(target=plot_images, args=(im, output_to_target(out), paths, f, names), daemon=True).start()
             f = save_dir / f'val_batch{batch_i}_mask.png'  # mask
-            Thread(target=plot_masks, args=(msk, f, voc_colormap()), daemon=True).start()
+            Thread(target=plot_masks, args=(msk, f, data['color_map']), daemon=True).start()
             f = save_dir / f'val_batch{batch_i}_mask_pred.png'  # predictions
-            Thread(target=plot_masks, args=(seg_out, f, voc_colormap()), daemon=True).start()
+            Thread(target=plot_masks, args=(seg_out, f, data['color_map']), daemon=True).start()
 
     # Compute metrics
     stats = [np.concatenate(x, 0) for x in zip(*stats)]  # to numpy
