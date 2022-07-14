@@ -93,7 +93,7 @@ def exif_transpose(image):
 
 
 def create_dataloader(path, imgsz, batch_size, stride, single_cls=False, hyp=None, augment=False, cache=False, pad=0.0,
-                      rect=False, rank=-1, workers=8, image_weights=False, quad=False, prefix='', shuffle=False):
+                      rect=False, rank=-1, workers=8, image_weights=False, quad=False, prefix='', shuffle=False, mask_pad=255):
     if rect and shuffle:
         LOGGER.warning('WARNING: --rect is incompatible with DataLoader shuffle, setting shuffle=False')
         shuffle = False
@@ -107,7 +107,8 @@ def create_dataloader(path, imgsz, batch_size, stride, single_cls=False, hyp=Non
                                       stride=int(stride),
                                       pad=pad,
                                       image_weights=image_weights,
-                                      prefix=prefix)
+                                      prefix=prefix,
+                                      mask_pad=mask_pad)
 
     batch_size = min(batch_size, len(dataset))
     nw = min([os.cpu_count() // WORLD_SIZE, batch_size if batch_size > 1 else 0, workers])  # number of workers
@@ -383,7 +384,7 @@ class LoadImagesAndLabels(Dataset):
     cache_version = 0.6  # dataset labels *.cache version
 
     def __init__(self, path, img_size=640, batch_size=16, augment=False, hyp=None, rect=False, image_weights=False,
-                 cache_images=False, single_cls=False, stride=32, pad=0.0, prefix=''):
+                 cache_images=False, single_cls=False, stride=32, pad=0.0, prefix='', mask_pad = 255):
         self.img_size = img_size
         self.augment = augment
         self.hyp = hyp
@@ -394,6 +395,7 @@ class LoadImagesAndLabels(Dataset):
         self.stride = stride
         self.path = path
         self.albumentations = Albumentations() if augment else None
+        self.mask_pad = mask_pad
 
         try:
             f = []  # image files
@@ -565,12 +567,12 @@ class LoadImagesAndLabels(Dataset):
         mosaic = self.mosaic and random.random() < hyp['mosaic']
         if mosaic:
             # Load mosaic
-            img, msk, labels = load_mosaic(self, index)
+            img, msk, labels = load_mosaic(self, index, mask_pad= self.mask_pad)
             shapes = None
 
             # MixUp augmentation
             if random.random() < hyp['mixup']:
-                img, msk, labels = mixup(img, msk, labels, *load_mosaic(self, random.randint(0, self.n - 1)))
+                img, msk, labels = mixup(img, msk, labels, *load_mosaic(self, random.randint(0, self.n - 1), mask_pad=self.mask_pad))
 
         else:
             # Load image
@@ -579,7 +581,7 @@ class LoadImagesAndLabels(Dataset):
 
             # Letterbox
             shape = self.batch_shapes[self.batch[index]] if self.rect else self.img_size  # final letterboxed shape
-            img, msk, ratio, pad = letterbox(img, msk, shape, auto=False, scaleup=self.augment)
+            img, msk, ratio, pad = letterbox(img, msk, shape, auto=False, scaleup=self.augment, mask_pad=self.mask_pad)
             shapes = (h0, w0), ((h / h0, w / w0), pad)  # for COCO mAP rescaling
 
             labels = self.labels[index].copy()
@@ -592,7 +594,8 @@ class LoadImagesAndLabels(Dataset):
                                                  translate=hyp['translate'],
                                                  scale=hyp['scale'],
                                                  shear=hyp['shear'],
-                                                 perspective=hyp['perspective'])
+                                                 perspective=hyp['perspective'],
+                                                 mask_pad=self.mask_pad)
 
         nl = len(labels)  # number of labels
         if nl:
@@ -708,7 +711,7 @@ def load_masks(self, i):
     else:
         return self.msks[i], self.img_hw0[i], self.img_hw[i]  # im, hw_original, hw_resized
 
-def load_mosaic(self, index):
+def load_mosaic(self, index, mask_pad):
     #  4-mosaic loader. Loads 1 image + 3 random images into a 4-image mosaic
     labels4, segments4 = [], []
     s = self.img_size
@@ -723,7 +726,7 @@ def load_mosaic(self, index):
         # place img in img4
         if i == 0:  # top left
             img4 = np.full((s * 2, s * 2, img.shape[2]), 114, dtype=np.uint8)  # base image with 4 tiles
-            msk4 = np.full((s * 2, s * 2), 0, dtype=np.uint8)  # base image with 4 tiles
+            msk4 = np.full((s * 2, s * 2), mask_pad, dtype=np.uint8)  # base image with 4 tiles
             x1a, y1a, x2a, y2a = max(xc - w, 0), max(yc - h, 0), xc, yc  # xmin, ymin, xmax, ymax (large image)
             x1b, y1b, x2b, y2b = w - (x2a - x1a), h - (y2a - y1a), w, h  # xmin, ymin, xmax, ymax (small image)
         elif i == 1:  # top right
@@ -756,7 +759,7 @@ def load_mosaic(self, index):
     # img4, labels4 = replicate(img4, labels4)  # replicate
 
     # Augment
-    img4, msk4, labels4, segments4 = copy_paste(img4, msk4, labels4, segments4, p=self.hyp['copy_paste'])
+    img4, msk4, labels4, segments4 = copy_paste(img4, msk4, labels4, segments4, p=self.hyp['copy_paste'], mask_pad=mask_pad)
     img4, msk4, labels4 = random_perspective(img4, msk4, labels4, segments4,
                                        degrees=self.hyp['degrees'],
                                        translate=self.hyp['translate'],

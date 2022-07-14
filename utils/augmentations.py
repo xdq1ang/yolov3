@@ -90,7 +90,7 @@ def replicate(im, labels):
     return im, labels
 
 
-def letterbox(im, msk, new_shape=(640, 640), color=(114, 114, 114), auto=True, scaleFill=False, scaleup=True, stride=32):
+def letterbox(im, msk, new_shape=(640, 640), color=(114, 114, 114), auto=True, scaleFill=False, scaleup=True, stride=32, mask_pad=255):
     # Resize and pad image while meeting stride-multiple constraints
     shape = im.shape[:2]  # current shape [height, width]
     if isinstance(new_shape, int):
@@ -121,12 +121,12 @@ def letterbox(im, msk, new_shape=(640, 640), color=(114, 114, 114), auto=True, s
     top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
     left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
     im = cv2.copyMakeBorder(im, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)  # add border
-    msk = cv2.copyMakeBorder(msk, top, bottom, left, right, cv2.BORDER_CONSTANT, value=0)  # add border
+    msk = cv2.copyMakeBorder(msk, top, bottom, left, right, cv2.BORDER_CONSTANT, value=mask_pad)  # add border
     return im, msk, ratio, (dw, dh)
 
 
 def random_perspective(im, msk, targets=(), segments=(), degrees=10, translate=.1, scale=.1, shear=10, perspective=0.0,
-                       border=(0, 0)):
+                       border=(0, 0), mask_pad=255):
     # torchvision.transforms.RandomAffine(degrees=(-10, 10), translate=(0.1, 0.1), scale=(0.9, 1.1), shear=(-10, 10))
     # targets = [cls, xyxy]
 
@@ -166,10 +166,10 @@ def random_perspective(im, msk, targets=(), segments=(), degrees=10, translate=.
     if (border[0] != 0) or (border[1] != 0) or (M != np.eye(3)).any():  # image changed
         if perspective:
             im = cv2.warpPerspective(im, M, dsize=(width, height), borderValue=(114, 114, 114))
-            msk = cv2.warpPerspective(msk, M, dsize=(width, height), borderValue=0, flags=PIL.Image.NEAREST)
+            msk = cv2.warpPerspective(msk, M, dsize=(width, height), borderValue=mask_pad, flags=PIL.Image.NEAREST)
         else:  # affine
             im = cv2.warpAffine(im, M[:2], dsize=(width, height), borderValue=(114, 114, 114))
-            msk = cv2.warpAffine(msk, M[:2], dsize=(width, height), borderValue=0, flags=PIL.Image.NEAREST)
+            msk = cv2.warpAffine(msk, M[:2], dsize=(width, height), borderValue=mask_pad, flags=PIL.Image.NEAREST)
 
     # Visualize
     # import matplotlib.pyplot as plt
@@ -216,7 +216,7 @@ def random_perspective(im, msk, targets=(), segments=(), degrees=10, translate=.
     return im, msk, targets
 
 
-def copy_paste(im, msk, labels, segments, p=0.5):
+def copy_paste(im, msk, labels, segments, p=0.5, mask_pad=255):
     # Implement Copy-Paste augmentation https://arxiv.org/abs/2012.07177, labels as nx5 np.array(cls, xyxy)
     n = len(segments)
     if p and n:
@@ -231,7 +231,7 @@ def copy_paste(im, msk, labels, segments, p=0.5):
                 labels = np.concatenate((labels, [[l[0], *box]]), 0)
                 segments.append(np.concatenate((w - s[:, 0:1], s[:, 1:2]), 1))
                 cv2.drawContours(im_new, [segments[j].astype(np.int32)], -1, (255, 255, 255), cv2.FILLED)
-                cv2.drawContours(msk_new, [segments[j].astype(np.int32)], -1, 0, cv2.FILLED)
+                cv2.drawContours(msk_new, [segments[j].astype(np.int32)], -1, mask_pad, cv2.FILLED)
 
         result = cv2.bitwise_and(src1=im, src2=im_new)
         result_msk = cv2.bitwise_and(src1=msk, src2=msk_new)
